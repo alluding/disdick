@@ -74,7 +74,7 @@ def setup_package() -> None:
         ],
         license='MIT',
         description='A Python wrapper for the Discord API, forked from disdick - discord.py.',
-        long_description=read_readme(),
+        long_description=readme,
         long_description_content_type='text/x-rst',
         include_package_data=True,
         install_requires=[
