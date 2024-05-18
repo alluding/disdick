@@ -1,29 +1,33 @@
 from typing import List, Dict, Optional
 
 from setuptools import setup, find_packages
-import subprocess
 import re
 
-def get_version() -> str:
-    version: str = '2.4.4'
-    if not version:
-        raise RuntimeError('version is not set')
+version = '2.4.4'
+if not version:
+    raise RuntimeError('version is not set')
 
-    if version.endswith(('a', 'b', 'rc')):
-        try:
-            commit_count = subprocess.check_output(['git', 'rev-list', '--count', 'HEAD']).decode('utf-8').strip()
-            version += commit_count
-            commit_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('utf-8').strip()
-            version += '+g' + commit_hash
-        except subprocess.CalledProcessError:
-    return version
-
-def read_readme() -> str:
+if version.endswith(('a', 'b', 'rc')):
     try:
-        with open('README.rst', 'r', encoding='utf-8') as f:
-            return f.read()
+        import subprocess
+
+        p = subprocess.Popen(['git', 'rev-list', '--count', 'HEAD'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        if out:
+            version += out.decode('utf-8').strip()
+        p = subprocess.Popen(['git', 'rev-parse', '--short', 'HEAD'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        if out:
+            version += '+g' + out.decode('utf-8').strip()
     except Exception:
-        return ''
+        pass
+
+readme: str = ''
+
+try:
+    with open('README.rst') as f:
+        readme = f.read()
+except: pass
 
 extras_require: Dict[str, List[str]] = {
     'voice': ['PyNaCl>=1.3.0,<1.6'],
@@ -58,8 +62,16 @@ def setup_package() -> None:
             'Documentation': 'https://discordpy.readthedocs.io/en/latest/',
             'Issue tracker': 'https://github.com/alluding/disdick/issues',
         },
-        version=get_version(),
-        packages=find_packages(),
+        version=version,
+        packages=[
+            'discord',
+            'discord.types',
+            'discord.ui',
+            'discord.webhook',
+            'discord.app_commands',
+            'discord.ext.commands',
+            'discord.ext.tasks',
+        ],
         license='MIT',
         description='A Python wrapper for the Discord API, forked from disdick - discord.py.',
         long_description=read_readme(),
