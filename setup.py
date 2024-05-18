@@ -78,7 +78,7 @@ def setup_package() -> None:
         long_description_content_type='text/x-rst',
         include_package_data=True,
         install_requires=[
-            'aiohttp', 'aiodns', 'orjson', 'typing_extensions', 'psutil', 'durations_nlp', 'fast_string_match'
+            'aiohttp', 'aiodns', 'orjson', 'typing_extensions', 'psutil', 'durations_nlp'
         ],
         extras_require=extras_require,
         python_requires='>=3.8.0',
