@@ -68,21 +68,20 @@ packages = [
 setup(
     name='disdick',
     author='cop-discord',
-    url='https://github.com/cop-discord/disdick',
+    url='https://github.com/alluding/disdick',
     project_urls={
         'Documentation': 'https://discordpy.readthedocs.io/en/latest/',
-        'Issue tracker': 'https://github.com/cop-discord/disdick/issues',
+        'Issue tracker': 'https://github.com/alluding/disdick/issues',
     },
     version=version,
     packages=packages,
     license='MIT',
-    description='A Python wrapper for the Discord API',
+    description='A Python wrapper for the Discord API, forked from disdick - discord.py.',
     long_description=readme,
     long_description_content_type='text/x-rst',
     include_package_data=True,
-    install_requires=['aiohttp','aiodns','orjson','typing_extensions','psutil','durations_nlp','rust_requests','fast_string_match'],
-    extras_require=extras_require,
-    download_url='https://github.com/cop-discord/disdick/archive/refs/tags/2.4.1.tar.gz',
+    install_requires=['aiohttp','aiodns','orjson','typing_extensions','psutil','durations_nlp','fast_string_match'],
+    extras_require=extras_require
     python_requires='>=3.8.0',
     classifiers=[
         'Development Status :: 5 - Production/Stable',
