@@ -1,0 +1,19 @@
+name: auto-format
+# Controls when the action will run. 
+on:
+  # Triggers the workflow on push or pull request events but only for the master branch
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+    
+jobs:
+  format:
+    # Check if the PR is not from a fork
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: black
+        uses: lgeiger/black-action@v1.0.1
+        with:
+          args: ./discord 

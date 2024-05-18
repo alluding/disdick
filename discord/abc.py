@@ -253,6 +253,16 @@ class User(Snowflake, Protocol):
         raise NotImplementedError
 
     @property
+    def avatar_decoration(self) -> Optional[Asset]:
+        """Optional[:class:`~discord.Asset`]: Returns an Asset that represents the user's avatar decoration, if present."""
+        return NotImplementedError
+
+    @property
+    def avatar_decoration_sku_id(self) -> Optional[int]:
+        """Optional[:class:`int`]: Returns an integer that represents the user's avatar decoration SKU ID, if present."""
+        raise NotImplementedError
+
+    @property
     def display_avatar(self) -> Asset:
         """:class:`~discord.Asset`: Returns the user's display avatar.
 
@@ -494,11 +504,17 @@ class GuildChannel:
             ch_type = options['type']
         except KeyError:
             pass
+        
         else:
             if not isinstance(ch_type, ChannelType):
                 raise TypeError('type field must be of type ChannelType')
             options['type'] = ch_type.value
-
+        try:
+            status = options.pop('status')
+        except KeyError:
+            pass
+        else:
+            await self._state.http.edit_voice_channel_status(status, channel_id=self.id, reason=reason)
         if options:
             return await self._state.http.edit_channel(self.id, reason=reason, **options)
 

@@ -47,9 +47,9 @@ __all__ = (
     'Modal',
 )
 # fmt: on
+from discord.globals import get_global
 
-
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 
 class Modal(View):
@@ -171,7 +171,7 @@ class Modal(View):
             else:
                 item = find(lambda i: i.custom_id == component['custom_id'], self._children)  # type: ignore
                 if item is None:
-                    _log.debug("Modal interaction referencing unknown item custom_id %s. Discarding", component['custom_id'])
+                    _log.debug("Modal interaction referencing unknown item custom_id . Discarding", component['custom_id'])
                     continue
                 item._refresh_state(interaction, component)  # type: ignore
 

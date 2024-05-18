@@ -45,8 +45,9 @@ from ..asset import Asset
 from ..partial_emoji import PartialEmoji
 from ..http import Route, handle_message_parameters, MultipartParameters, HTTPClient, json_or_text
 from ..mixins import Hashable
-from ..channel import TextChannel, ForumChannel, PartialMessageable
+from ..channel import TextChannel, ForumChannel, PartialMessageable, ForumTag
 from ..file import File
+from ..globals import get_global
 
 __all__ = (
     'Webhook',
@@ -55,7 +56,7 @@ __all__ = (
     'PartialWebhookGuild',
 )
 
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -88,6 +89,7 @@ if TYPE_CHECKING:
         PartialChannel as PartialChannelPayload,
     )
     from ..types.emoji import PartialEmoji as PartialEmojiPayload
+    from ..types.snowflake import SnowflakeList 
 
     BE = TypeVar('BE', bound=BaseException)
     _State = Union[ConnectionState, '_WebhookState']
@@ -178,11 +180,7 @@ class AsyncWebhookAdapter:
                         method, url, data=to_send, headers=headers, params=params, proxy=proxy, proxy_auth=proxy_auth
                     ) as response:
                         _log.debug(
-                            'Webhook ID %s with %s %s has returned status code %s',
-                            webhook_id,
-                            method,
-                            url,
-                            response.status,
+                            f'Webhook ID {webhook_id} with {method} {url} has returned status code {response.status}',
                         )
                         data = await json_or_text(response)
 
@@ -190,9 +188,7 @@ class AsyncWebhookAdapter:
                         if remaining == '0' and response.status != 429:
                             delta = utils._parse_ratelimit_header(response)
                             _log.debug(
-                                'Webhook ID %s has exhausted its rate limit bucket (retry: %s).',
-                                webhook_id,
-                                delta,
+                                f'Webhook ID {webhook_id} has exhausted its rate limit bucket (retry: {delta}).',
                             )
                             lock.delay_by(delta)
 
@@ -202,10 +198,9 @@ class AsyncWebhookAdapter:
                         if response.status == 429:
                             if not response.headers.get('Via'):
                                 raise HTTPException(response, data)
-                            fmt = 'Webhook ID %s is rate limited. Retrying in %.2f seconds.'
-
                             retry_after: float = data['retry_after']  # type: ignore
-                            _log.warning(fmt, webhook_id, retry_after)
+                            fmt = f'Webhook ID {webhook_id} is rate limited. Retrying in {retry_after:.2f} seconds.'
+                            _log.warning(fmt)
                             await asyncio.sleep(retry_after)
                             continue
 
@@ -1301,7 +1296,14 @@ class Webhook(BaseWebhook):
             'name': name,
             'channel_id': channel.id,
             'guild_id': channel.guild.id,
-            'user': {'username': user.name, 'discriminator': user.discriminator,'global_name': user.global_name, 'id': user.id, 'avatar': user._avatar},
+            'user': {
+                'username': user.name,
+                'discriminator': user.discriminator,
+                'id': user.id,
+                'avatar': user._avatar,
+                'avatar_decoration_data': user._avatar_decoration_data,
+                'global_name': user.global_name,
+            },
         }
 
         state = channel._state
@@ -1633,6 +1635,7 @@ class Webhook(BaseWebhook):
         thread_name: str = MISSING,
         wait: bool = False,
         suppress_embeds: bool = False,
+        applied_tags: List[ForumTag] = MISSING,
         silent: bool = False,
     ) -> Optional[WebhookMessage]:
         """|coro|
@@ -1777,6 +1780,11 @@ class Webhook(BaseWebhook):
         if thread_name is not MISSING and thread is not MISSING:
             raise TypeError('Cannot mix thread_name and thread keyword arguments.')
 
+        if applied_tags is MISSING:
+            applied_tag_ids = MISSING
+        else:
+            applied_tag_ids: SnowflakeList = [tag.id for tag in applied_tags]
+
         with handle_message_parameters(
             content=content,
             username=username,
@@ -1791,6 +1799,7 @@ class Webhook(BaseWebhook):
             thread_name=thread_name,
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
+            applied_tags=applied_tag_ids,
         ) as params:
             adapter = async_context.get()
             thread_id: Optional[int] = None

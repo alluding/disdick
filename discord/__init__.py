@@ -2,12 +2,13 @@
 Discord API Wrapper
 ~~~~~~~~~~~~~~~~~~~
 
-A basic wrapper for the Discord API.
+An advanced wrapper for the Discord API.
 
 :copyright: (c) 2015-present Rapptz
 :license: MIT, see LICENSE for more details.
 
 """
+# FUCK GITHUB WORKFLOWS X2
 
 __title__ = 'disdick'
 __author__ = 'cop-discord/Rapptz'
@@ -16,6 +17,7 @@ __copyright__ = 'Copyright 2015-present Rapptz'
 __version__ = '2.4.0'
 
 __path__ = __import__('pkgutil').extend_path(__path__, __name__)
+__slots__ = ('you','are','a','faggot')
 
 import logging
 from typing import NamedTuple, Literal
@@ -71,6 +73,7 @@ from .components import *
 from .threads import *
 from .automod import *
 from .pool import *
+from .globals import *
 
 class VersionInfo(NamedTuple):
     major: int
@@ -80,8 +83,7 @@ class VersionInfo(NamedTuple):
     serial: int
 
 
-version_info: VersionInfo = VersionInfo(major=2, minor=3, micro=0, releaselevel='alpha', serial=0)
+version_info: VersionInfo = VersionInfo(major=2, minor=3, micro=1, releaselevel='alpha', serial=0)
 
-logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-del logging, NamedTuple, Literal, VersionInfo
+del NamedTuple, Literal, VersionInfo

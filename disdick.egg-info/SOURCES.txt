@@ -42,7 +42,6 @@ discord/partial_emoji.py
 discord/permissions.py
 discord/player.py
 discord/pool.py
-discord/punishments.py
 discord/raw_models.py
 discord/reaction.py
 discord/regex.py

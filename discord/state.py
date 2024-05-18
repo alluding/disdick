@@ -76,6 +76,7 @@ from .sticker import GuildSticker
 from .automod import AutoModRule, AutoModAction
 from .audit_logs import AuditLogEntry
 from ._types import ClientT
+from .globals import get_global
 
 if TYPE_CHECKING:
     from .abc import PrivateChannel
@@ -106,12 +107,14 @@ class ChunkRequest:
     def __init__(
         self,
         guild_id: int,
+        shard_id: int,
         loop: asyncio.AbstractEventLoop,
         resolver: Callable[[int], Any],
         *,
         cache: bool = True,
     ) -> None:
         self.guild_id: int = guild_id
+        self.shard_id: int = shard_id
         self.resolver: Callable[[int], Any] = resolver
         self.loop: asyncio.AbstractEventLoop = loop
         self.cache: bool = cache
@@ -150,14 +153,14 @@ class ChunkRequest:
                 future.set_result(self.buffer)
 
 
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 
 async def logging_coroutine(coroutine: Coroutine[Any, Any, T], *, info: str) -> Optional[T]:
     try:
         await coroutine
     except Exception:
-        _log.exception('Exception occurred during %s', info)
+        _log.exception(f'Exception occurred during {info}')
 
 
 class ConnectionState(Generic[ClientT]):
@@ -260,6 +263,10 @@ class ConnectionState(Generic[ClientT]):
 
         self.clear()
 
+    @property
+    def cache_guild_expressions(self) -> bool:
+        return self._intents.emojis_and_stickers
+
     async def close(self) -> None:
         for voice in self.voice_clients:
             try:
@@ -292,6 +299,16 @@ class ConnectionState(Generic[ClientT]):
             self._messages: Optional[Deque[Message]] = deque(maxlen=self.max_messages)
         else:
             self._messages: Optional[Deque[Message]] = None
+
+    def clear_chunk_requests(self, shard_id: int | None) -> None:
+        removed = []
+        for key, request in self._chunk_requests.items():
+            if shard_id is None or request.shard_id == shard_id:
+                request.done()
+                removed.append(key)
+
+        for key in removed:
+            del self._chunk_requests[key]
 
     def process_chunk_requests(self, guild_id: int, nonce: Optional[str], members: List[Member], complete: bool) -> None:
         removed = []
@@ -523,7 +540,7 @@ class ConnectionState(Generic[ClientT]):
         if ws is None:
             raise RuntimeError('Somehow do not have a websocket for this guild_id')
 
-        request = ChunkRequest(guild.id, self.loop, self._get_guild, cache=cache)
+        request = ChunkRequest(guild.id, guild.shard_id, self.loop, self._get_guild, cache=cache)
         self._chunk_requests[request.nonce] = request
 
         try:
@@ -562,7 +579,7 @@ class ConnectionState(Generic[ClientT]):
                 try:
                     await asyncio.wait_for(future, timeout=timeout)
                 except asyncio.TimeoutError:
-                    _log.warning('Shard ID %s timed out waiting for chunks for guild_id %s.', guild.shard_id, guild.id)
+                    _log.warning(f'Shard ID {guild.shard_id} timed out waiting for chunks for guild_id {guild.id}.')
 
                 if guild.unavailable is False:
                     self.dispatch('guild_available', guild)
@@ -590,6 +607,7 @@ class ConnectionState(Generic[ClientT]):
 
         self._ready_state: asyncio.Queue[Guild] = asyncio.Queue()
         self.clear(views=False)
+        self.clear_chunk_requests(None)
         self.user = user = ClientUser(state=self, data=data['user'])
         self._users[user.id] = user  # type: ignore
 
@@ -762,14 +780,14 @@ class ConnectionState(Generic[ClientT]):
         # guild_id won't be None here
         guild = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('PRESENCE_UPDATE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'PRESENCE_UPDATE referencing an unknown guild ID: {guild_id}. Discarding.')
             return
 
         user = data['user']
         member_id = int(user['id'])
         member = guild.get_member(member_id)
         if member is None:
-            _log.debug('PRESENCE_UPDATE referencing an unknown member ID: %s. Discarding', member_id)
+            _log.debug(f'PRESENCE_UPDATE referencing an unknown member ID: {member_id}. Discarding')
             return
 
         old_member = Member._copy(member)
@@ -818,7 +836,7 @@ class ConnectionState(Generic[ClientT]):
                 self.dispatch('private_channel_update', old_channel, channel)
                 return
             else:
-                _log.debug('CHANNEL_UPDATE referencing an unknown channel ID: %s. Discarding.', channel_id)
+                _log.debug(f'CHANNEL_UPDATE referencing an unknown channel ID: {channel_id}. Discarding.')
 
         guild_id = utils._get_as_snowflake(data, 'guild_id')
         guild = self._get_guild(guild_id)
@@ -829,14 +847,14 @@ class ConnectionState(Generic[ClientT]):
                 channel._update(guild, data)  # type: ignore # the data payload varies based on the channel type.
                 self.dispatch('guild_channel_update', old_channel, channel)
             else:
-                _log.debug('CHANNEL_UPDATE referencing an unknown channel ID: %s. Discarding.', channel_id)
+                _log.debug(f'CHANNEL_UPDATE referencing an unknown channel ID: {channel_id}. Discarding.')
         else:
-            _log.debug('CHANNEL_UPDATE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'CHANNEL_UPDATE referencing an unknown guild ID: {guild_id}. Discarding.')
 
     def parse_channel_create(self, data: gw.ChannelCreateEvent) -> None:
         factory, ch_type = _channel_factory(data['type'])
         if factory is None:
-            _log.debug('CHANNEL_CREATE referencing an unknown channel type %s. Discarding.', data['type'])
+            _log.debug(f'CHANNEL_CREATE referencing an unknown channel type {data["type"]}. Discarding.')
             return
 
         guild_id = utils._get_as_snowflake(data, 'guild_id')
@@ -847,7 +865,7 @@ class ConnectionState(Generic[ClientT]):
             guild._add_channel(channel)  # type: ignore
             self.dispatch('guild_channel_create', channel)
         else:
-            _log.debug('CHANNEL_CREATE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'CHANNEL_CREATE referencing an unknown guild ID: {guild_id}. Discarding.')
             return
 
     def parse_channel_pins_update(self, data: gw.ChannelPinsUpdateEvent) -> None:
@@ -861,7 +879,7 @@ class ConnectionState(Generic[ClientT]):
             channel = guild and guild._resolve_channel(channel_id)
 
         if channel is None:
-            _log.debug('CHANNEL_PINS_UPDATE referencing an unknown channel ID: %s. Discarding.', channel_id)
+            _log.debug(f'CHANNEL_PINS_UPDATE referencing an unknown channel ID: {channel_id}. Discarding.')
             return
 
         last_pin = utils.parse_time(data.get('last_pin_timestamp'))
@@ -875,7 +893,7 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild: Optional[Guild] = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_CREATE referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_CREATE referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         thread = Thread(guild=guild, state=guild._state, data=data)
@@ -894,7 +912,7 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_UPDATE referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_UPDATE referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         raw = RawThreadUpdateEvent(data)
@@ -916,7 +934,7 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_DELETE referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_DELETE referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         raw = RawThreadDeleteEvent(data)
@@ -931,7 +949,7 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild: Optional[Guild] = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_LIST_SYNC referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_LIST_SYNC referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         try:
@@ -967,13 +985,13 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild: Optional[Guild] = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_MEMBER_UPDATE referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_MEMBER_UPDATE referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         thread_id = int(data['id'])
         thread: Optional[Thread] = guild.get_thread(thread_id)
         if thread is None:
-            _log.debug('THREAD_MEMBER_UPDATE referencing an unknown thread ID: %s. Discarding', thread_id)
+            _log.debug(f'THREAD_MEMBER_UPDATE referencing an unknown thread ID: {thread_id}. Discarding')
             return
 
         member = ThreadMember(thread, data)
@@ -983,14 +1001,14 @@ class ConnectionState(Generic[ClientT]):
         guild_id = int(data['guild_id'])
         guild: Optional[Guild] = self._get_guild(guild_id)
         if guild is None:
-            _log.debug('THREAD_MEMBERS_UPDATE referencing an unknown guild ID: %s. Discarding', guild_id)
+            _log.debug(f'THREAD_MEMBERS_UPDATE referencing an unknown guild ID: {guild_id} Discarding')
             return
 
         thread_id = int(data['id'])
         thread: Optional[Thread] = guild.get_thread(thread_id)
         raw = RawThreadMembersUpdate(data)
         if thread is None:
-            _log.debug('THREAD_MEMBERS_UPDATE referencing an unknown thread ID: %s. Discarding', thread_id)
+            _log.debug(f'THREAD_MEMBERS_UPDATE referencing an unknown thread ID: {thread_id}. Discarding')
             return
 
         added_members = [ThreadMember(thread, d) for d in data.get('added_members', [])]
@@ -1016,7 +1034,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_guild_member_add(self, data: gw.GuildMemberAddEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('GUILD_MEMBER_ADD referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_MEMBER_ADD referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         member = Member(guild=guild, data=data, state=self)
@@ -1043,7 +1061,7 @@ class ConnectionState(Generic[ClientT]):
                 guild._remove_member(member)
                 self.dispatch('member_remove', member)
         else:
-            _log.debug('GUILD_MEMBER_REMOVE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_MEMBER_REMOVE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
 
         self.dispatch('raw_member_remove', raw)
 
@@ -1052,7 +1070,7 @@ class ConnectionState(Generic[ClientT]):
         user = data['user']
         user_id = int(user['id'])
         if guild is None:
-            _log.debug('GUILD_MEMBER_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_MEMBER_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         member = guild.get_member(user_id)
@@ -1074,12 +1092,12 @@ class ConnectionState(Generic[ClientT]):
                     self.dispatch('user_update', user_update[0], user_update[1])
 
                 guild._add_member(member)
-            _log.debug('GUILD_MEMBER_UPDATE referencing an unknown member ID: %s. Discarding.', user_id)
+            _log.debug(f'GUILD_MEMBER_UPDATE referencing an unknown member ID: {user_id}. Discarding.')
 
     def parse_guild_emojis_update(self, data: gw.GuildEmojisUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('GUILD_EMOJIS_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_EMOJIS_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         before_emojis = guild.emojis
@@ -1092,7 +1110,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_guild_stickers_update(self, data: gw.GuildStickersUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('GUILD_STICKERS_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_STICKERS_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         before_stickers = guild.stickers
@@ -1105,7 +1123,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_guild_audit_log_entry_create(self, data: gw.GuildAuditLogEntryCreate) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('GUILD_AUDIT_LOG_ENTRY_CREATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_AUDIT_LOG_ENTRY_CREATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         entry = AuditLogEntry(
@@ -1127,7 +1145,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_auto_moderation_rule_create(self, data: AutoModerationRule) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('AUTO_MODERATION_RULE_CREATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'AUTO_MODERATION_RULE_CREATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         rule = AutoModRule(data=data, guild=guild, state=self)
@@ -1137,7 +1155,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_auto_moderation_rule_update(self, data: AutoModerationRule) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('AUTO_MODERATION_RULE_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'AUTO_MODERATION_RULE_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         rule = AutoModRule(data=data, guild=guild, state=self)
@@ -1147,7 +1165,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_auto_moderation_rule_delete(self, data: AutoModerationRule) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('AUTO_MODERATION_RULE_DELETE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'AUTO_MODERATION_RULE_DELETE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         rule = AutoModRule(data=data, guild=guild, state=self)
@@ -1157,7 +1175,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_auto_moderation_action_execution(self, data: AutoModerationActionExecution) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('AUTO_MODERATION_ACTION_EXECUTION referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'AUTO_MODERATION_ACTION_EXECUTION referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         execution = AutoModAction(data=data, state=self)
@@ -1196,7 +1214,9 @@ class ConnectionState(Generic[ClientT]):
         cache = cache or self.member_cache_flags.joined
         request = self._chunk_requests.get(guild.id)
         if request is None:
-            self._chunk_requests[guild.id] = request = ChunkRequest(guild.id, self.loop, self._get_guild, cache=cache)
+            self._chunk_requests[guild.id] = request = ChunkRequest(
+                guild.id, guild.shard_id, self.loop, self._get_guild, cache=cache
+            )
             await self.chunker(guild.id, nonce=request.nonce)
 
         if wait:
@@ -1212,7 +1232,7 @@ class ConnectionState(Generic[ClientT]):
         try:
             await asyncio.wait_for(self.chunk_guild(guild), timeout=timeout)
         except asyncio.TimeoutError:
-            _log.warning('Somehow timed out waiting for chunks for guild ID %s.', guild.id)
+            _log.warning(f'Somehow timed out waiting for chunks for guild ID {guild.id}.')
 
         if unavailable is False:
             self.dispatch('guild_available', guild)
@@ -1257,12 +1277,12 @@ class ConnectionState(Generic[ClientT]):
             guild._from_data(data)
             self.dispatch('guild_update', old_guild, guild)
         else:
-            _log.debug('GUILD_UPDATE referencing an unknown guild ID: %s. Discarding.', data['id'])
+            _log.debug(f'GUILD_UPDATE referencing an unknown guild ID: {data["id"]}. Discarding.')
 
     def parse_guild_delete(self, data: gw.GuildDeleteEvent) -> None:
         guild = self._get_guild(int(data['id']))
         if guild is None:
-            _log.debug('GUILD_DELETE referencing an unknown guild ID: %s. Discarding.', data['id'])
+            _log.debug(f'GUILD_DELETE referencing an unknown guild ID: {data["id"]}. Discarding.')
             return
 
         if data.get('unavailable', False):
@@ -1306,7 +1326,7 @@ class ConnectionState(Generic[ClientT]):
     def parse_guild_role_create(self, data: gw.GuildRoleCreateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('GUILD_ROLE_CREATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_ROLE_CREATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
             return
 
         role_data = data['role']
@@ -1325,7 +1345,7 @@ class ConnectionState(Generic[ClientT]):
             else:
                 self.dispatch('guild_role_delete', role)
         else:
-            _log.debug('GUILD_ROLE_DELETE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_ROLE_DELETE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_role_update(self, data: gw.GuildRoleUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1338,7 +1358,7 @@ class ConnectionState(Generic[ClientT]):
                 role._update(role_data)
                 self.dispatch('guild_role_update', old_role, role)
         else:
-            _log.debug('GUILD_ROLE_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_ROLE_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_members_chunk(self, data: gw.GuildMembersChunkEvent) -> None:
         guild_id = int(data['guild_id'])
@@ -1349,7 +1369,7 @@ class ConnectionState(Generic[ClientT]):
             return
 
         members = [Member(guild=guild, data=member, state=self) for member in data.get('members', [])]
-        _log.debug('Processed a chunk for %s members in guild ID %s.', len(members), guild_id)
+        _log.debug(f'Processed a chunk for {len(members)} members in guild ID {guild_id}.')
 
         if presences:
             member_dict: Dict[Snowflake, Member] = {str(member.id): member for member in members}
@@ -1368,7 +1388,7 @@ class ConnectionState(Generic[ClientT]):
         if guild is not None:
             self.dispatch('guild_integrations_update', guild)
         else:
-            _log.debug('GUILD_INTEGRATIONS_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'GUILD_INTEGRATIONS_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_integration_create(self, data: gw.IntegrationCreateEvent) -> None:
         guild_id = int(data['guild_id'])
@@ -1378,7 +1398,7 @@ class ConnectionState(Generic[ClientT]):
             integration = cls(data=data, guild=guild)
             self.dispatch('integration_create', integration)
         else:
-            _log.debug('INTEGRATION_CREATE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'INTEGRATION_CREATE referencing an unknown guild ID: {guild_id}. Discarding.')
 
     def parse_integration_update(self, data: gw.IntegrationUpdateEvent) -> None:
         guild_id = int(data['guild_id'])
@@ -1388,7 +1408,7 @@ class ConnectionState(Generic[ClientT]):
             integration = cls(data=data, guild=guild)
             self.dispatch('integration_update', integration)
         else:
-            _log.debug('INTEGRATION_UPDATE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'INTEGRATION_UPDATE referencing an unknown guild ID: {guild_id}. Discarding.')
 
     def parse_integration_delete(self, data: gw.IntegrationDeleteEvent) -> None:
         guild_id = int(data['guild_id'])
@@ -1397,12 +1417,12 @@ class ConnectionState(Generic[ClientT]):
             raw = RawIntegrationDeleteEvent(data)
             self.dispatch('raw_integration_delete', raw)
         else:
-            _log.debug('INTEGRATION_DELETE referencing an unknown guild ID: %s. Discarding.', guild_id)
+            _log.debug(f'INTEGRATION_DELETE referencing an unknown guild ID: {guild_id}. Discarding.')
 
     def parse_webhooks_update(self, data: gw.WebhooksUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
         if guild is None:
-            _log.debug('WEBHOOKS_UPDATE referencing an unknown guild ID: %s. Discarding', data['guild_id'])
+            _log.debug(f'WEBHOOKS_UPDATE referencing an unknown guild ID: {data["guild_id"]}. Discarding')
             return
 
         channel_id = utils._get_as_snowflake(data, 'channel_id')
@@ -1410,7 +1430,7 @@ class ConnectionState(Generic[ClientT]):
         if channel is not None:
             self.dispatch('webhooks_update', channel)
         else:
-            _log.debug('WEBHOOKS_UPDATE referencing an unknown channel ID: %s. Discarding.', data['channel_id'])
+            _log.debug(f'WEBHOOKS_UPDATE referencing an unknown channel ID: {data["channel_id"]}. Discarding.')
 
     def parse_stage_instance_create(self, data: gw.StageInstanceCreateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1419,7 +1439,7 @@ class ConnectionState(Generic[ClientT]):
             guild._stage_instances[stage_instance.id] = stage_instance
             self.dispatch('stage_instance_create', stage_instance)
         else:
-            _log.debug('STAGE_INSTANCE_CREATE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'STAGE_INSTANCE_CREATE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_stage_instance_update(self, data: gw.StageInstanceUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1430,9 +1450,9 @@ class ConnectionState(Generic[ClientT]):
                 stage_instance._update(data)
                 self.dispatch('stage_instance_update', old_stage_instance, stage_instance)
             else:
-                _log.debug('STAGE_INSTANCE_UPDATE referencing unknown stage instance ID: %s. Discarding.', data['id'])
+                _log.debug(f'STAGE_INSTANCE_UPDATE referencing unknown stage instance ID: {data["id"]}. Discarding.')
         else:
-            _log.debug('STAGE_INSTANCE_UPDATE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'STAGE_INSTANCE_UPDATE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_stage_instance_delete(self, data: gw.StageInstanceDeleteEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1444,7 +1464,7 @@ class ConnectionState(Generic[ClientT]):
             else:
                 self.dispatch('stage_instance_delete', stage_instance)
         else:
-            _log.debug('STAGE_INSTANCE_DELETE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'STAGE_INSTANCE_DELETE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_scheduled_event_create(self, data: gw.GuildScheduledEventCreateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1453,7 +1473,7 @@ class ConnectionState(Generic[ClientT]):
             guild._scheduled_events[scheduled_event.id] = scheduled_event
             self.dispatch('scheduled_event_create', scheduled_event)
         else:
-            _log.debug('SCHEDULED_EVENT_CREATE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'SCHEDULED_EVENT_CREATE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_scheduled_event_update(self, data: gw.GuildScheduledEventUpdateEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1464,9 +1484,9 @@ class ConnectionState(Generic[ClientT]):
                 scheduled_event._update(data)
                 self.dispatch('scheduled_event_update', old_scheduled_event, scheduled_event)
             else:
-                _log.debug('SCHEDULED_EVENT_UPDATE referencing unknown scheduled event ID: %s. Discarding.', data['id'])
+                _log.debug(f'SCHEDULED_EVENT_UPDATE referencing unknown scheduled event ID: {data["id"]}. Discarding.')
         else:
-            _log.debug('SCHEDULED_EVENT_UPDATE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'SCHEDULED_EVENT_UPDATE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_scheduled_event_delete(self, data: gw.GuildScheduledEventDeleteEvent) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1478,7 +1498,7 @@ class ConnectionState(Generic[ClientT]):
             else:
                 self.dispatch('scheduled_event_delete', scheduled_event)
         else:
-            _log.debug('SCHEDULED_EVENT_DELETE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'SCHEDULED_EVENT_DELETE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_scheduled_event_user_add(self, data: gw.GuildScheduledEventUserAdd) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1490,14 +1510,13 @@ class ConnectionState(Generic[ClientT]):
                     scheduled_event._add_user(user)
                     self.dispatch('scheduled_event_user_add', scheduled_event, user)
                 else:
-                    _log.debug('SCHEDULED_EVENT_USER_ADD referencing unknown user ID: %s. Discarding.', data['user_id'])
+                    _log.debug(f'SCHEDULED_EVENT_USER_ADD referencing unknown user ID: {data["user_id"]}. Discarding.')
             else:
                 _log.debug(
-                    'SCHEDULED_EVENT_USER_ADD referencing unknown scheduled event ID: %s. Discarding.',
-                    data['guild_scheduled_event_id'],
+                    f'SCHEDULED_EVENT_USER_ADD referencing unknown scheduled event ID: {data["guild_scheduled_event_id"]}. Discarding.',
                 )
         else:
-            _log.debug('SCHEDULED_EVENT_USER_ADD referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'SCHEDULED_EVENT_USER_ADD referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_guild_scheduled_event_user_remove(self, data: gw.GuildScheduledEventUserRemove) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1509,14 +1528,13 @@ class ConnectionState(Generic[ClientT]):
                     scheduled_event._pop_user(user.id)
                     self.dispatch('scheduled_event_user_remove', scheduled_event, user)
                 else:
-                    _log.debug('SCHEDULED_EVENT_USER_REMOVE referencing unknown user ID: %s. Discarding.', data['user_id'])
+                    _log.debug(f'SCHEDULED_EVENT_USER_REMOVE referencing unknown user ID: {data["user_id"]}. Discarding.')
             else:
                 _log.debug(
-                    'SCHEDULED_EVENT_USER_REMOVE referencing unknown scheduled event ID: %s. Discarding.',
-                    data['guild_scheduled_event_id'],
+                    f'SCHEDULED_EVENT_USER_REMOVE referencing unknown scheduled event ID: {data["guild_scheduled_event_id"]}. Discarding.',
                 )
         else:
-            _log.debug('SCHEDULED_EVENT_USER_REMOVE referencing unknown guild ID: %s. Discarding.', data['guild_id'])
+            _log.debug(f'SCHEDULED_EVENT_USER_REMOVE referencing unknown guild ID: {data["guild_id"]}. Discarding.')
 
     def parse_application_command_permissions_update(self, data: GuildApplicationCommandPermissionsPayload):
         raw = RawAppCommandPermissionsUpdateEvent(data=data, state=self)
@@ -1546,7 +1564,7 @@ class ConnectionState(Generic[ClientT]):
 
                 self.dispatch('voice_state_update', member, before, after)
             else:
-                _log.debug('VOICE_STATE_UPDATE referencing an unknown member ID: %s. Discarding.', data['user_id'])
+                _log.debug(f'VOICE_STATE_UPDATE referencing an unknown member ID: {data["user_id"]}. Discarding.')
 
     def parse_voice_server_update(self, data: gw.VoiceServerUpdateEvent) -> None:
         key_id = int(data['guild_id'])
@@ -1704,7 +1722,7 @@ class AutoShardedConnectionState(ConnectionState[ClientT]):
                 try:
                     await asyncio.wait_for(future, timeout=timeout)
                 except asyncio.TimeoutError:
-                    _log.warning('Shard ID %s timed out waiting for chunks for guild_id %s.', guild.shard_id, guild.id)
+                    _log.warning(f'Shard ID {guild.shard_id} timed out waiting for chunks for guild_id {guild.id}.')
 
                 if guild.unavailable is False:
                     self.dispatch('guild_available', guild)
@@ -1731,6 +1749,7 @@ class AutoShardedConnectionState(ConnectionState[ClientT]):
 
         if shard_id in self._ready_tasks:
             self._ready_tasks[shard_id].cancel()
+            self.clear_chunk_requests(shard_id)
 
         if shard_id not in self._ready_states:
             self._ready_states[shard_id] = asyncio.Queue()

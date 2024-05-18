@@ -63,6 +63,7 @@ from ..errors import ClientException, HTTPException
 from ..enums import AppCommandType, InteractionType
 from ..utils import MISSING, _get_as_snowflake, _is_submodule, _shorten
 from .._types import ClientT
+from ..globals import get_global
 
 
 if TYPE_CHECKING:
@@ -78,7 +79,7 @@ if TYPE_CHECKING:
 
 __all__ = ('CommandTree',)
 
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 
 def _retrieve_guild_ids(

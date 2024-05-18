@@ -57,8 +57,8 @@ from .file import File
 from .mentions import AllowedMentions
 from . import __version__, utils
 from .utils import MISSING
-
-_log = logging.getLogger(__name__)
+from .globals import get_global
+_log = get_global("logger", logging.getLogger(__name__))
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -169,6 +169,7 @@ def handle_message_parameters(
     mention_author: Optional[bool] = None,
     thread_name: str = MISSING,
     channel_payload: Dict[str, Any] = MISSING,
+    applied_tags: Optional[SnowflakeList] = MISSING,
 ) -> MultipartParameters:
     if files is not MISSING and file is not MISSING:
         raise TypeError('Cannot mix file and files keyword arguments.')
@@ -247,6 +248,7 @@ def handle_message_parameters(
     else:
         files = [a for a in attachments if isinstance(a, File)]
 
+
     if attachments is not MISSING:
         file_index = 0
         attachments_payload = []
@@ -258,6 +260,12 @@ def handle_message_parameters(
                 attachments_payload.append(attachment.to_dict())
 
         payload['attachments'] = attachments_payload
+        
+    if applied_tags is not MISSING:
+        if applied_tags is not None:
+            payload['applied_tags'] = applied_tags
+        else:
+            payload['applied_tags'] = []
 
     if channel_payload is not MISSING:
         payload = {
@@ -690,7 +698,7 @@ class HTTPClient:
 
                 try:
                     async with self.__session.request(method, url, **kwargs) as response:
-                        _log.debug('%s %s with %s has returned %s', method, url, kwargs.get('data'), response.status)
+                        _log.debug(f'{method} {url} with {kwargs.get("data")} has returned {response.status}')
 
                         # even errors have text involved in them so this is safe to call
                         data = await json_or_text(response)
@@ -715,16 +723,16 @@ class HTTPClient:
                                     # Alternating sub-ratelimits means that the requests oscillate between
                                     # different underlying rate limits -- this can lead to unexpected 429s
                                     # It is unavoidable.
-                                    fmt = 'A route (%s) has changed hashes: %s -> %s.'
-                                    _log.debug(fmt, route_key, bucket_hash, discord_hash)
+                                    fmt = f'A route ({route_key}) has changed hashes: {bucket_hash} -> {discord_hash}.'
+                                    _log.debug(fmt)
 
                                     self._bucket_hashes[route_key] = discord_hash
                                     recalculated_key = discord_hash + route.major_parameters
                                     self._buckets[recalculated_key] = ratelimit
                                     self._buckets.pop(key, None)
                                 elif route_key not in self._bucket_hashes:
-                                    fmt = '%s has found its initial rate limit bucket hash (%s).'
-                                    _log.debug(fmt, route_key, discord_hash)
+                                    fmt = f'{route_key} has found its initial rate limit bucket hash ({discord_hash}).'
+                                    _log.debug(fmt)
                                     self._bucket_hashes[route_key] = discord_hash
                                     self._buckets[discord_hash + route.major_parameters] = ratelimit
 
@@ -733,13 +741,12 @@ class HTTPClient:
                                 ratelimit.update(response, use_clock=self.use_clock)
                                 if ratelimit.remaining == 0:
                                     _log.debug(
-                                        'A rate limit bucket (%s) has been exhausted. Pre-emptively rate limiting...',
-                                        discord_hash or route_key,
+                                        f'A rate limit bucket ({discord_hash or route_key}) has been exhausted. Pre-emptively rate limiting...',
                                     )
 
                         # the request was successful so just return the text/json
                         if 300 > response.status >= 200:
-                            _log.debug('%s %s has received %s', method, url, data)
+                            _log.debug(f'{method} {url} has received {data}')
                             return data
 
                         # we are being rate limited
@@ -755,35 +762,27 @@ class HTTPClient:
                                 # It is unclear what should happen in these cases other than just using the retry_after
                                 # value in the body.
                                 _log.debug(
-                                    '%s %s received a 429 despite having %s remaining requests. This is a sub-ratelimit.',
-                                    method,
-                                    url,
-                                    ratelimit.remaining,
+                                    f'{method} {url} received a 429 despite having {ratelimit.remaining} remaining requests. This is a sub-ratelimit.',
                                 )
 
                             retry_after: float = data['retry_after']
                             if self.max_ratelimit_timeout and retry_after > self.max_ratelimit_timeout:
                                 _log.warning(
-                                    'We are being rate limited. %s %s responded with 429. Timeout of %.2f was too long, erroring instead.',
-                                    method,
-                                    url,
-                                    retry_after,
+                                    f'We are being rate limited. {method} {url} responded with 429. Timeout of {retry_after:.2f} was too long, erroring instead.',
                                 )
                                 raise RateLimited(retry_after)
 
-                            fmt = 'We are being rate limited. %s %s responded with 429. Retrying in %.2f seconds.'
-                            _log.warning(fmt, method, url, retry_after)
+                            fmt = f'We are being rate limited. {method} {url} responded with 429. Retrying in {retry_after:.2f} seconds.'
+                            _log.warning(fmt)
 
                             _log.debug(
-                                'Rate limit is being handled by bucket hash %s with %r major parameters',
-                                bucket_hash,
-                                route.major_parameters,
+                                f'Rate limit is being handled by bucket hash {bucket_hash} with {route.major_parameters} major parameters',
                             )
 
                             # check if it's a global rate limit
                             is_global = data.get('global', False)
                             if is_global:
-                                _log.warning('Global rate limit has been hit. Retrying in %.2f seconds.', retry_after)
+                                _log.warning(f'Global rate limit has been hit. Retrying in {retry_after:.2f} seconds.')
                                 self._global_over.clear()
 
                             await asyncio.sleep(retry_after)
@@ -1168,6 +1167,13 @@ class HTTPClient:
             'delete_message_seconds': delete_message_seconds,
         }
         return self.request(r, json=payload, reason=reason)
+    
+    def edit_voice_channel_status(
+        self, status: Optional[str], *, channel_id: int, reason: Optional[str] = None
+    ) -> Response[None]:
+        r = Route('PUT', '/channels/{channel_id}/voice-status', channel_id=channel_id)
+        payload = {'status': status}
+        return self.request(r, reason=reason, json=payload)
 
     def guild_voice_state(
         self,

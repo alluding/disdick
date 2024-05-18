@@ -47,13 +47,14 @@ from ..http import Route, handle_message_parameters
 from ..channel import PartialMessageable
 
 from .async_ import BaseWebhook, _WebhookState
+from ..globals import get_global
 
 __all__ = (
     'SyncWebhook',
     'SyncWebhookMessage',
 )
 
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -167,11 +168,7 @@ class WebhookAdapter:
                         method, url, data=to_send, files=file_data, headers=headers, params=params
                     ) as response:
                         _log.debug(
-                            'Webhook ID %s with %s %s has returned status code %s',
-                            webhook_id,
-                            method,
-                            url,
-                            response.status_code,
+                            f'Webhook ID {webhook_id} with {method} {url} has returned status code {response.status_code}',
                         )
                         response.encoding = 'utf-8'
                         # Compatibility with aiohttp
@@ -188,9 +185,7 @@ class WebhookAdapter:
                         if remaining == '0' and response.status_code != 429:
                             delta = utils._parse_ratelimit_header(response)
                             _log.debug(
-                                'Webhook ID %s has exhausted its rate limit bucket (retry: %s).',
-                                webhook_id,
-                                delta,
+                                f'Webhook ID {webhook_id} has exhausted its rate limit bucket (retry: {delta}).',
                             )
                             lock.delay_by(delta)
 
@@ -200,10 +195,9 @@ class WebhookAdapter:
                         if response.status_code == 429:
                             if not response.headers.get('Via'):
                                 raise HTTPException(response, data)
-                            fmt = 'Webhook ID %s is rate limited. Retrying in %.2f seconds.'
 
                             retry_after: float = data['retry_after']  # type: ignore
-                            _log.warning(fmt, webhook_id, retry_after)
+                            _log.warning(f'Webhook ID {webhook_id} is rate limited. Retrying in {retry_after:.2f} seconds.')
                             time.sleep(retry_after)
                             continue
 

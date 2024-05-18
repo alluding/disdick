@@ -43,7 +43,7 @@ from .errors import (
 )
 
 from .enums import Status
-
+from .globals import get_global
 from typing import TYPE_CHECKING, Any, Callable, Tuple, Type, Optional, List, Dict
 
 if TYPE_CHECKING:
@@ -56,7 +56,7 @@ __all__ = (
     'ShardInfo',
 )
 
-_log = logging.getLogger(__name__)
+_log = get_global("logger", logging.getLogger(__name__))
 
 
 class EventType:
@@ -154,7 +154,7 @@ class Shard:
                 return
 
         retry = self._backoff.delay()
-        _log.error('Attempting a reconnect for shard ID %s in %.2fs', self.id, retry, exc_info=e)
+        _log.error(f'Attempting a reconnect for shard ID {self.id} in {retry:.2f}', exc_info=e)
         await asyncio.sleep(retry)
         self._queue_put(EventItem(EventType.reconnect, self, e))
 
@@ -179,7 +179,7 @@ class Shard:
         self._cancel_task()
         self._dispatch('disconnect')
         self._dispatch('shard_disconnect', self.id)
-        _log.debug('Got a request to %s the websocket at Shard ID %s.', exc.op, self.id)
+        _log.debug(f'Got a request to {exc.op} the websocket at Shard ID {self.id}.')
         try:
             coro = DiscordWebSocket.from_client(
                 self._client,
@@ -192,6 +192,10 @@ class Shard:
             self.ws = await asyncio.wait_for(coro, timeout=60.0)
         except self._handled_exceptions as e:
             await self._handle_disconnect(e)
+        except ReconnectWebSocket as e:
+            _log.debug(f'Somehow got a signal to {e.op} while trying to {exc.op} shard ID {self.id}.')
+            op = EventType.resume if e.resume else EventType.identify
+            self._queue_put(EventItem(op, self, e))
         except asyncio.CancelledError:
             return
         except Exception as e:
@@ -338,6 +342,7 @@ class AutoShardedClient(Client):
     def __init__(self, *args: Any, intents: Intents, **kwargs: Any) -> None:
         kwargs.pop('shard_id', None)
         self.shard_ids: Optional[List[int]] = kwargs.pop('shard_ids', None)
+        self.shard_connect_timeout: Optional[float] = kwargs.pop('shard_connect_timeout', 180.0)
         super().__init__(*args, intents=intents, **kwargs)
 
         if self.shard_ids is not None:
@@ -415,9 +420,9 @@ class AutoShardedClient(Client):
     async def launch_shard(self, gateway: yarl.URL, shard_id: int, *, initial: bool = False) -> None:
         try:
             coro = DiscordWebSocket.from_client(self, initial=initial, gateway=gateway, shard_id=shard_id)
-            ws = await asyncio.wait_for(coro, timeout=180.0)
+            ws = await asyncio.wait_for(coro, timeout=self.shard_connect_timeout)
         except Exception:
-            _log.exception('Failed to connect for shard_id: %s. Retrying...', shard_id)
+            _log.exception(f'Failed to connect for shard_id: {shard_id}. Retrying...')
             await asyncio.sleep(5.0)
             return await self.launch_shard(gateway, shard_id)
 

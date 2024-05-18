@@ -317,10 +317,13 @@ class Guild(Hashable):
         '_stage_instances',
         '_scheduled_events',
         '_threads',
+        '_afk_channel_id',
         '_incidents_data',
         'approximate_member_count',
         'approximate_presence_count',
         'premium_progress_bar_enabled',
+        'max_stage_video_users',
+        '_safety_alerts_channel_id',
     )
 
     _PREMIUM_GUILD_LIMITS: ClassVar[Dict[Optional[int], _GuildLimit]] = {
@@ -474,6 +477,7 @@ class Guild(Hashable):
         )
         self.explicit_content_filter: ContentFilter = try_enum(ContentFilter, guild.get('explicit_content_filter', 0))
         self.afk_timeout: int = guild.get('afk_timeout', 0)
+        self._afk_channel_id: Optional[int] = utils._get_as_snowflake(guild, 'afk_channel_id')
         self._icon: Optional[str] = guild.get('icon')
         self._banner: Optional[str] = guild.get('banner')
         self.unavailable: bool = guild.get('unavailable', False)
@@ -494,6 +498,7 @@ class Guild(Hashable):
             if state.cache_guild_expressions
             else ()
         )
+        
         self.features: List[GuildFeature] = guild.get('features', [])
         self._splash: Optional[str] = guild.get('splash')
         self._system_channel_id: Optional[int] = utils._get_as_snowflake(guild, 'system_channel_id')

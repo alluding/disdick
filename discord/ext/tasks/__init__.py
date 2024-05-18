@@ -46,8 +46,8 @@ import inspect
 from collections.abc import Sequence
 from discord.backoff import ExponentialBackoff
 from discord.utils import MISSING
-
-_log = logging.getLogger(__name__)
+from discord.globals import get_global
+_log = get_global("logger", logging.getLogger(__name__))
 
 # fmt: off
 __all__ = (
@@ -224,13 +224,9 @@ class Loop(Generic[LF]):
                     while self._is_explicit_time() and self._next_iteration <= self._last_iteration:
                         _log.warn(
                             (
-                                'Clock drift detected for task %s. Woke up at %s but needed to sleep until %s. '
-                                'Sleeping until %s again to correct clock'
-                            ),
-                            self.coro.__qualname__,
-                            discord.utils.utcnow(),
-                            self._next_iteration,
-                            self._next_iteration,
+                                f'Clock drift detected for task {self.coro.__qualname__}. Woke up at {discord.utils.utcnow()} but needed to sleep until {self._next_iteration}. '
+                                f'Sleeping until {self._next_iteration} again to correct clock'
+                            )
                         )
                         await self._try_sleep_until(self._next_iteration)
                         self._next_iteration = self._get_next_sleep_time()
@@ -534,7 +530,7 @@ class Loop(Generic[LF]):
 
     async def _error(self, *args: Any) -> None:
         exception: Exception = args[-1]
-        _log.error('Unhandled exception in internal background task %r.', self.coro.__name__, exc_info=exception)
+        _log.error(f'Unhandled exception in internal background task {self.coro.__name__}.', exc_info=exception)
 
     def before_loop(self, coro: FT) -> FT:
         """A decorator that registers a coroutine to be called before the loop starts running.
